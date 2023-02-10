@@ -1,5 +1,6 @@
 use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt};
 use gtk::traits::WidgetExt;
+use log::info;
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
 use std::sync::atomic::{self, AtomicBool};
 use std::sync::Arc;
@@ -7,7 +8,15 @@ use std::time::Duration;
 
 const SLEEP_STEP: Duration = Duration::from_millis(250);
 
+const ICON_START: &str = "media-playback-start-symbolic";
+const ICON_PAUSE: &str = "media-playback-pause-symbolic";
+const ICON_SKIP: &str = "media-skip-forward-symbolic"; // maybe go-jump-symbolic
+const ICON_RENEW: &str = "media-skip-backward-symbolic";
+const ICON_RESTART: &str = "object-rotate-left-symbolic";
+const ICON_CONFIG: &str = "preferences-system-symbolic"; // maybe applications-system-symbolic
+
 fn main() {
+    simple_logger::init_with_env().unwrap();
     let model = AppModel::default();
     let app = RelmApp::new(model);
     app.run();
@@ -19,6 +28,7 @@ struct AppWidgets {
     vbox: gtk::Box,
     toggle_button: gtk::Button,
     skip_button: gtk::Button,
+    renew_button: gtk::Button,
     restart_button: gtk::Button,
     label: gtk::Label,
 }
@@ -33,8 +43,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
     ) -> Self {
         let window = gtk::ApplicationWindow::builder()
             .title("Pomo Oxide")
-            .default_width(400)
-            .default_height(350)
+            .default_width(350)
+            .default_height(300)
             .build();
         let vbox = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -47,27 +57,25 @@ impl Widgets<AppModel, ()> for AppWidgets {
             .spacing(10)
             .build();
 
-        /* Icons:
-        preferences-system-symbolic applications-system-symbolic
-        media-playback-start-symbolic media-playback-pause-symbolic
-        media-skip-forward-symbolic go-first-symbolic media-skip-forward-symbolic.symbolic go-next-symbolic
-        media-refresh-symbolic go-previous-symbolic object-rotate-left-symbolic system-reboot-symbolic
-        */
-
         // let config_button = gtk::MenuButton;
 
         let toggle_button = gtk::Button::builder()
-            .icon_name("media-playback-start-symbolic")
+            .icon_name(ICON_START)
             .tooltip_text("Start")
-            .height_request(35)
+            .height_request(40)
             .build();
         let skip_button = gtk::Button::builder()
-            .icon_name("go-first-symbolic")
+            .icon_name(ICON_SKIP)
             .tooltip_text("Skip")
             .hexpand(true)
             .build();
+        let renew_button = gtk::Button::builder()
+            .icon_name(ICON_RENEW)
+            .tooltip_text(&format!("Renew {}", model.state))
+            .hexpand(true)
+            .build();
         let restart_button = gtk::Button::builder()
-            .icon_name("object-rotate-left-symbolic")
+            .icon_name(ICON_RESTART)
             .tooltip_text("Restart")
             .hexpand(true)
             .build();
@@ -78,9 +86,10 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
         // Connect the widgets
         window.set_child(Some(&vbox));
-        vbox.append(&toggle_button);
         hbox.append(&skip_button);
+        hbox.append(&renew_button);
         hbox.append(&restart_button);
+        vbox.append(&toggle_button);
         vbox.append(&hbox);
         vbox.append(&label);
 
@@ -89,6 +98,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
         toggle_button.connect_clicked(move |_| send!(snd, AppMsg::Toggle(None)));
         let snd = sender.clone();
         skip_button.connect_clicked(move |_| send!(snd, AppMsg::Skip));
+        let snd = sender.clone();
+        renew_button.connect_clicked(move |_| send!(snd, AppMsg::Renew));
         restart_button.connect_clicked(move |_| send!(sender, AppMsg::Restart));
 
         Self {
@@ -96,6 +107,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
             vbox,
             toggle_button,
             skip_button,
+            renew_button,
             restart_button,
             label,
         }
@@ -108,14 +120,13 @@ impl Widgets<AppModel, ()> for AppWidgets {
     fn view(&mut self, model: &AppModel, _sender: Sender<<AppModel as Model>::Msg>) {
         if model.running {
             self.toggle_button.set_tooltip_text(Some("Pause"));
-            self.toggle_button
-                .set_icon_name("media-playback-pause-symbolic")
+            self.toggle_button.set_icon_name(ICON_PAUSE)
         } else {
             self.toggle_button.set_tooltip_text(Some("Start"));
-            self.toggle_button
-                .set_icon_name("media-playback-start-symbolic")
+            self.toggle_button.set_icon_name(ICON_START)
         }
-
+        self.renew_button
+            .set_tooltip_text(Some(&format!("Renew {}", model.state)));
         self.label.set_label(&min_format(&model.timer));
     }
 }
@@ -156,6 +167,12 @@ enum State {
     Rest,
 }
 
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
 impl State {
     fn duration(&self, config: &Config) -> Duration {
         match self {
@@ -174,15 +191,13 @@ impl Model for AppModel {
 
 impl AppUpdate for AppModel {
     fn update(&mut self, msg: Self::Msg, _: &Self::Components, sender: Sender<Self::Msg>) -> bool {
-        dbg!(&msg);
-
         self.clear_step_permission();
 
         match msg {
             AppMsg::Step => self.try_next_state(),
             AppMsg::Toggle(toggle) => self.toggle(toggle),
             AppMsg::Skip => self.next_state(),
-            AppMsg::RestartState => self.restart_state(),
+            AppMsg::Renew => self.restart_state(),
             AppMsg::Restart => {
                 self.state = State::Pomodoro;
                 self.rest_counter = 0;
@@ -248,8 +263,7 @@ impl AppModel {
     }
     fn restart_state(&mut self) {
         self.timer = self.state.duration(&self.config);
-        println!("Starting {:?} - {}", &self.state, min_format(&self.timer));
-        self.toggle(Some(true));
+        info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
 }
 
@@ -259,7 +273,7 @@ enum AppMsg {
     Step,
     Toggle(Option<bool>),
     Skip,
-    RestartState,
+    Renew,
     Restart,
     ChangeConfig(Box<Config>),
 }
@@ -289,9 +303,7 @@ impl Default for Config {
 
 fn min_format(dur: &Duration) -> String {
     // simulating div_ceil(); it was unstable
-
     let millis = dur.as_millis();
     let secs = (millis / 1000) + if (millis % 1000) != 0 { 1 } else { 0 };
-
     format!("{}:{:02}", secs / 60, secs % 60)
 }
