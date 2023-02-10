@@ -1,6 +1,8 @@
 use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt};
 use gtk::traits::WidgetExt;
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
+use std::sync::atomic::{self, AtomicBool};
+use std::sync::Arc;
 use std::time::Duration;
 
 const SLEEP_STEP: Duration = Duration::from_millis(250);
@@ -9,27 +11,6 @@ fn main() {
     let model = AppModel::default();
     let app = RelmApp::new(model);
     app.run();
-
-    // let config = Config::default();
-    // let mut state = AppModel::default();
-
-    // loop {
-    //     println!("Starting Pomodoro - {}m", config.pomodoro_time.as_min());
-    //     sleep(config.pomodoro_time / 60 / 5);
-
-    //     state.pomodoro_count += 1;
-    //     state.rest_counter += 1;
-
-    //     if state.rest_counter % config.rest_count as usize == 0 {
-    //         state.rest_counter = 0;
-
-    //         println!("Starting Rest     - {}m", config.rest_time.as_min());
-    //         sleep(config.rest_time / 60 / 5);
-    //     } else {
-    //         println!("Starting Break    - {}m", config.break_time.as_min());
-    //         sleep(config.break_time / 60 / 5);
-    //     }
-    // }
 }
 
 #[allow(unused)]
@@ -147,6 +128,8 @@ struct AppModel {
     rest_counter: usize,
     pomodoro_count: usize,
     config: Config,
+    /// Stores if a running thread has permission to send AppMsg::Step
+    step_permission: Option<Arc<AtomicBool>>,
 }
 
 impl Default for AppModel {
@@ -160,6 +143,7 @@ impl Default for AppModel {
             rest_counter: 0,
             pomodoro_count: 0,
             config,
+            step_permission: None,
         }
     }
 }
@@ -192,6 +176,8 @@ impl AppUpdate for AppModel {
     fn update(&mut self, msg: Self::Msg, _: &Self::Components, sender: Sender<Self::Msg>) -> bool {
         dbg!(&msg);
 
+        self.clear_step_permission();
+
         match msg {
             AppMsg::Step => self.try_next_state(),
             AppMsg::Toggle(toggle) => self.toggle(toggle),
@@ -212,9 +198,16 @@ impl AppUpdate for AppModel {
             let duration = SLEEP_STEP.min(self.timer);
             self.timer -= duration;
 
+            self.clear_step_permission();
+            let perm = Arc::new(AtomicBool::new(true));
+            self.step_permission = Some(Arc::clone(&perm));
+
             std::thread::spawn(move || {
                 std::thread::sleep(duration);
-                sender.send(AppMsg::Step).unwrap();
+                // if we still have permission, send step
+                if perm.load(atomic::Ordering::SeqCst) {
+                    sender.send(AppMsg::Step).unwrap();
+                }
             });
         }
 
@@ -225,6 +218,11 @@ impl AppUpdate for AppModel {
 impl AppModel {
     fn toggle(&mut self, running: Option<bool>) {
         self.running = running.unwrap_or(!self.running);
+    }
+    fn clear_step_permission(&mut self) {
+        if let Some(perm) = self.step_permission.take() {
+            perm.store(false, atomic::Ordering::SeqCst);
+        }
     }
     fn try_next_state(&mut self) {
         if self.timer.is_zero() {
