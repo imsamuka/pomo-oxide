@@ -72,7 +72,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
             .hexpand(true)
             .build();
 
-        let label = gtk::Label::new(Some(&model.timer.as_min_format()));
+        let label = gtk::Label::new(Some(&min_format(&model.timer)));
         label.set_halign(gtk::Align::Center);
         label.set_margin_all(10);
 
@@ -116,7 +116,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
                 .set_icon_name("media-playback-start-symbolic")
         }
 
-        self.label.set_label(&model.timer.as_min_format());
+        self.label.set_label(&min_format(&model.timer));
     }
 }
 
@@ -182,7 +182,7 @@ impl AppUpdate for AppModel {
             AppMsg::Step => self.try_next_state(),
             AppMsg::Toggle(toggle) => self.toggle(toggle),
             AppMsg::Skip => self.next_state(),
-            AppMsg::RestartCurrent => self.restart_state(),
+            AppMsg::RestartState => self.restart_state(),
             AppMsg::Restart => {
                 self.state = State::Pomodoro;
                 self.rest_counter = 0;
@@ -248,11 +248,7 @@ impl AppModel {
     }
     fn restart_state(&mut self) {
         self.timer = self.state.duration(&self.config);
-        println!(
-            "Starting {:?} - {}",
-            &self.state,
-            self.timer.as_min_format()
-        );
+        println!("Starting {:?} - {}", &self.state, min_format(&self.timer));
         self.toggle(Some(true));
     }
 }
@@ -263,7 +259,7 @@ enum AppMsg {
     Step,
     Toggle(Option<bool>),
     Skip,
-    RestartCurrent,
+    RestartState,
     Restart,
     ChangeConfig(Box<Config>),
 }
@@ -291,17 +287,11 @@ impl Default for Config {
     }
 }
 
-trait AsMinute {
-    fn as_min(&self) -> u64;
-    fn as_min_format(&self) -> String;
-}
+fn min_format(dur: &Duration) -> String {
+    // simulating div_ceil(); it was unstable
 
-impl AsMinute for Duration {
-    fn as_min(&self) -> u64 {
-        self.as_secs() / 60
-    }
+    let millis = dur.as_millis();
+    let secs = (millis / 1000) + if (millis % 1000) != 0 { 1 } else { 0 };
 
-    fn as_min_format(&self) -> String {
-        format!("{}:{:02}", self.as_secs() / 60, self.as_secs() % 60)
-    }
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
