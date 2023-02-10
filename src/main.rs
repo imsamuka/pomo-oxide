@@ -1,7 +1,6 @@
 use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt};
 use gtk::traits::WidgetExt;
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
-use std::thread::sleep;
 use std::time::Duration;
 
 const SLEEP_STEP: Duration = Duration::from_millis(250);
@@ -106,7 +105,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
         // Connect events
         let snd = sender.clone();
-        toggle_button.connect_clicked(move |_| send!(snd, AppMsg::Toggle));
+        toggle_button.connect_clicked(move |_| send!(snd, AppMsg::Toggle(None)));
         let snd = sender.clone();
         skip_button.connect_clicked(move |_| send!(snd, AppMsg::Skip));
         restart_button.connect_clicked(move |_| send!(sender, AppMsg::Restart));
@@ -140,7 +139,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AppModel {
     running: bool,
     timer: Duration,
@@ -150,12 +149,37 @@ struct AppModel {
     config: Config,
 }
 
+impl Default for AppModel {
+    fn default() -> Self {
+        let state = State::default();
+        let config = Config::default();
+        Self {
+            running: false,
+            timer: state.duration(&config),
+            state,
+            rest_counter: 0,
+            pomodoro_count: 0,
+            config,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 enum State {
+    #[default]
     Pomodoro,
     Break,
-    #[default] // After start, change to pomodoro
     Rest,
+}
+
+impl State {
+    fn duration(&self, config: &Config) -> Duration {
+        match self {
+            State::Pomodoro => config.pomodoro_time,
+            State::Break => config.break_time,
+            State::Rest => config.rest_time,
+        }
+    }
 }
 
 impl Model for AppModel {
@@ -165,15 +189,12 @@ impl Model for AppModel {
 }
 
 impl AppUpdate for AppModel {
-    fn update(&mut self, msg: Self::Msg, _: &Self::Components, _sender: Sender<Self::Msg>) -> bool {
+    fn update(&mut self, msg: Self::Msg, _: &Self::Components, sender: Sender<Self::Msg>) -> bool {
         dbg!(&msg);
 
-        // let timer = components.timer.
-
         match msg {
-            AppMsg::Start => self.toggle(true),
-            AppMsg::Pause => self.toggle(false),
-            AppMsg::Toggle => self.toggle(!self.running),
+            AppMsg::Step => self.try_next_state(),
+            AppMsg::Toggle(toggle) => self.toggle(toggle),
             AppMsg::Skip => self.next_state(),
             AppMsg::RestartCurrent => self.restart_state(),
             AppMsg::Restart => {
@@ -187,18 +208,23 @@ impl AppUpdate for AppModel {
             }
         }
 
+        if self.running {
+            let duration = SLEEP_STEP.min(self.timer);
+            self.timer -= duration;
+
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                sender.send(AppMsg::Step).unwrap();
+            });
+        }
+
         true
     }
 }
 
 impl AppModel {
-    fn toggle(&mut self, running: bool) {
-        self.running = running
-    }
-    fn step_sleep(&mut self) {
-        let duration = SLEEP_STEP.min(self.timer);
-        self.timer -= duration;
-        sleep(duration)
+    fn toggle(&mut self, running: Option<bool>) {
+        self.running = running.unwrap_or(!self.running);
     }
     fn try_next_state(&mut self) {
         if self.timer.is_zero() {
@@ -223,26 +249,21 @@ impl AppModel {
         self.restart_state()
     }
     fn restart_state(&mut self) {
-        self.timer = match self.state {
-            State::Pomodoro => self.config.pomodoro_time,
-            State::Break => self.config.break_time,
-            State::Rest => self.config.rest_time,
-        };
+        self.timer = self.state.duration(&self.config);
         println!(
             "Starting {:?} - {}",
             &self.state,
             self.timer.as_min_format()
         );
-        self.toggle(true);
+        self.toggle(Some(true));
     }
 }
 
 #[allow(unused)]
 #[derive(Debug)]
 enum AppMsg {
-    Start,
-    Pause,
-    Toggle,
+    Step,
+    Toggle(Option<bool>),
     Skip,
     RestartCurrent,
     Restart,
