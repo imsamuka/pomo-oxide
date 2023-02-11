@@ -30,7 +30,8 @@ struct AppWidgets {
     skip_button: gtk::Button,
     renew_button: gtk::Button,
     restart_button: gtk::Button,
-    label: gtk::Label,
+    timer_label: gtk::Label,
+    state_label: gtk::Label,
 }
 
 impl Widgets<AppModel, ()> for AppWidgets {
@@ -44,7 +45,6 @@ impl Widgets<AppModel, ()> for AppWidgets {
         let window = gtk::ApplicationWindow::builder()
             .title("Pomo Oxide")
             .default_width(350)
-            .default_height(300)
             .build();
         let vbox = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
@@ -54,6 +54,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
         let hbox = gtk::Box::builder()
             .orientation(gtk::Orientation::Horizontal)
+            .height_request(35)
             .spacing(10)
             .build();
 
@@ -62,7 +63,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
         let toggle_button = gtk::Button::builder()
             .icon_name(ICON_START)
             .tooltip_text("Start")
-            .height_request(40)
+            .height_request(45)
             .build();
         let skip_button = gtk::Button::builder()
             .icon_name(ICON_SKIP)
@@ -80,9 +81,13 @@ impl Widgets<AppModel, ()> for AppWidgets {
             .hexpand(true)
             .build();
 
-        let label = gtk::Label::new(Some(&min_format(&model.timer)));
-        label.set_halign(gtk::Align::Center);
-        label.set_margin_all(10);
+        let timer_label = gtk::Label::new(None);
+        timer_label.set_halign(gtk::Align::Center);
+        timer_label.set_markup(&min_as_markup(min_format(&model.timer)));
+
+        let state_label = gtk::Label::new(None);
+        state_label.set_halign(gtk::Align::Center);
+        state_label.set_markup(&model.state.as_markup(&model.config));
 
         // Connect the widgets
         window.set_child(Some(&vbox));
@@ -91,7 +96,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
         hbox.append(&restart_button);
         vbox.append(&toggle_button);
         vbox.append(&hbox);
-        vbox.append(&label);
+        vbox.append(&state_label);
+        vbox.append(&timer_label);
 
         // Connect events
         let snd = sender.clone();
@@ -109,7 +115,8 @@ impl Widgets<AppModel, ()> for AppWidgets {
             skip_button,
             renew_button,
             restart_button,
-            label,
+            timer_label,
+            state_label,
         }
     }
 
@@ -127,7 +134,10 @@ impl Widgets<AppModel, ()> for AppWidgets {
         }
         self.renew_button
             .set_tooltip_text(Some(&format!("Renew {}", model.state)));
-        self.label.set_label(&min_format(&model.timer));
+        self.timer_label
+            .set_markup(&min_as_markup(min_format(&model.timer)));
+        self.state_label
+            .set_markup(&model.state.as_markup(&model.config));
     }
 }
 
@@ -180,6 +190,19 @@ impl State {
             State::Break => config.break_time,
             State::Rest => config.rest_time,
         }
+    }
+
+    fn as_markup(&self, _config: &Config) -> String {
+        // TODO: set colors from Config
+        let color = match self {
+            State::Pomodoro => "#FFA3CC",
+            State::Break => "#FAFFA3",
+            State::Rest => "#A3FFD6",
+        };
+        format!(
+            r#"<span font="Sans Bold 28" color="{}">{}</span>"#,
+            color, self
+        )
     }
 }
 
@@ -306,4 +329,8 @@ fn min_format(dur: &Duration) -> String {
     let millis = dur.as_millis();
     let secs = (millis / 1000) + if (millis % 1000) != 0 { 1 } else { 0 };
     format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+fn min_as_markup(s: String) -> String {
+    format!("<span font=\"Sans Bold 64\">{}</span>", s)
 }
