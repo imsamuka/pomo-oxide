@@ -1,8 +1,8 @@
 use log::info;
 use relm4::gtk;
-use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, WidgetExt};
+use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, WidgetExt};
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
-use std::sync::{Arc, atomic, atomic::AtomicBool};
+use std::sync::{atomic, atomic::AtomicBool, Arc};
 use std::time::Duration;
 
 const SLEEP_STEP: Duration = Duration::from_millis(250);
@@ -21,122 +21,62 @@ fn main() {
     app.run();
 }
 
-#[allow(unused)]
-struct AppWidgets {
-    window: gtk::ApplicationWindow,
-    vbox: gtk::Box,
-    toggle_button: gtk::Button,
-    skip_button: gtk::Button,
-    renew_button: gtk::Button,
-    restart_button: gtk::Button,
-    timer_label: gtk::Label,
-    state_label: gtk::Label,
-}
-
+#[relm4_macros::widget]
 impl Widgets<AppModel, ()> for AppWidgets {
-    type Root = gtk::ApplicationWindow;
+    view! {
+        gtk::ApplicationWindow {
+            set_title: Some("Pomo Oxide"),
+            set_default_width: 350,
+            set_child = Some(&gtk::Box) {
+                set_orientation: gtk::Orientation::Vertical,
+                set_margin_all: 10,
+                set_spacing: 10,
 
-    fn init_view(
-        model: &AppModel,
-        _components: &<AppModel as Model>::Components,
-        sender: Sender<<AppModel as Model>::Msg>,
-    ) -> Self {
-        let window = gtk::ApplicationWindow::builder()
-            .title("Pomo Oxide")
-            .default_width(350)
-            .build();
-        let vbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Vertical)
-            .spacing(10)
-            .build();
-        vbox.set_margin_all(10);
+                // append = &gtk::MenuButton {}
 
-        let hbox = gtk::Box::builder()
-            .orientation(gtk::Orientation::Horizontal)
-            .height_request(35)
-            .spacing(10)
-            .build();
+                append = &gtk::Button {
+                    set_icon_name: watch!{ if model.running { ICON_PAUSE } else { ICON_START } },
+                    set_tooltip_text: watch!{ Some(if model.running { "Pause" } else { "Start" }) },
+                    set_height_request: 50,
+                    connect_clicked(sender) => move |_| { send!(sender, AppMsg::Toggle(None)) },
+                },
 
-        // let config_button = gtk::MenuButton;
+                append = &gtk::Box {
+                    set_orientation: gtk::Orientation::Horizontal,
+                    set_spacing: 10,
+                    set_height_request: 40,
+                    set_homogeneous: true,
 
-        let toggle_button = gtk::Button::builder()
-            .icon_name(ICON_START)
-            .tooltip_text("Start")
-            .height_request(45)
-            .build();
-        let skip_button = gtk::Button::builder()
-            .icon_name(ICON_SKIP)
-            .tooltip_text("Skip")
-            .hexpand(true)
-            .build();
-        let renew_button = gtk::Button::builder()
-            .icon_name(ICON_RENEW)
-            .tooltip_text(&format!("Renew {}", model.state))
-            .hexpand(true)
-            .build();
-        let restart_button = gtk::Button::builder()
-            .icon_name(ICON_RESTART)
-            .tooltip_text("Restart")
-            .hexpand(true)
-            .build();
+                    append = &gtk::Button {
+                        set_icon_name: ICON_SKIP,
+                        set_tooltip_text: Some("Skip"),
+                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Skip) },
+                    },
 
-        let timer_label = gtk::Label::new(None);
-        timer_label.set_halign(gtk::Align::Center);
-        timer_label.set_markup(&min_as_markup(min_format(&model.timer)));
+                    append = &gtk::Button {
+                        set_icon_name: ICON_RENEW,
+                        set_tooltip_text: watch!{ Some(&format!("Renew {}", model.state)) },
+                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Renew) },
+                    },
 
-        let state_label = gtk::Label::new(None);
-        state_label.set_halign(gtk::Align::Center);
-        state_label.set_markup(&model.state.as_markup(&model.config));
+                    append = &gtk::Button {
+                        set_icon_name: ICON_RESTART,
+                        set_tooltip_text: Some("Restart"),
+                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Restart) },
+                    },
+                },
 
-        // Connect the widgets
-        window.set_child(Some(&vbox));
-        hbox.append(&skip_button);
-        hbox.append(&renew_button);
-        hbox.append(&restart_button);
-        vbox.append(&toggle_button);
-        vbox.append(&hbox);
-        vbox.append(&state_label);
-        vbox.append(&timer_label);
+                append = &gtk::Label {
+                    set_halign: gtk::Align::Center,
+                    set_markup: watch!{ &model.state.as_markup(&model.config) },
+                },
 
-        // Connect events
-        let snd = sender.clone();
-        toggle_button.connect_clicked(move |_| send!(snd, AppMsg::Toggle(None)));
-        let snd = sender.clone();
-        skip_button.connect_clicked(move |_| send!(snd, AppMsg::Skip));
-        let snd = sender.clone();
-        renew_button.connect_clicked(move |_| send!(snd, AppMsg::Renew));
-        restart_button.connect_clicked(move |_| send!(sender, AppMsg::Restart));
-
-        Self {
-            window,
-            vbox,
-            toggle_button,
-            skip_button,
-            renew_button,
-            restart_button,
-            timer_label,
-            state_label,
+                append = &gtk::Label {
+                    set_halign: gtk::Align::Center,
+                    set_markup: watch!{ &min_as_markup(min_format(&model.timer)) },
+                },
+            }
         }
-    }
-
-    fn root_widget(&self) -> Self::Root {
-        self.window.clone()
-    }
-
-    fn view(&mut self, model: &AppModel, _sender: Sender<<AppModel as Model>::Msg>) {
-        if model.running {
-            self.toggle_button.set_tooltip_text(Some("Pause"));
-            self.toggle_button.set_icon_name(ICON_PAUSE)
-        } else {
-            self.toggle_button.set_tooltip_text(Some("Start"));
-            self.toggle_button.set_icon_name(ICON_START)
-        }
-        self.renew_button
-            .set_tooltip_text(Some(&format!("Renew {}", model.state)));
-        self.timer_label
-            .set_markup(&min_as_markup(min_format(&model.timer)));
-        self.state_label
-            .set_markup(&model.state.as_markup(&model.config));
     }
 }
 

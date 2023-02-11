@@ -570,6 +570,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "relm4",
+ "relm4-macros",
  "simple_logger",
 ]
 
@@ -645,6 +646,17 @@ dependencies = [
  "gtk4",
  "log",
  "once_cell",
+]
+
+[[package]]
+name = "relm4-macros"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7136d9b9b97dc87198c619587de7bd61aca5ec4bec58a7167404c1edf750a490"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
