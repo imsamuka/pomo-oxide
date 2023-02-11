@@ -1,6 +1,6 @@
 use log::info;
 use relm4::gtk;
-use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, WidgetExt};
+use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, PopoverExt, WidgetExt};
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
 use std::sync::{atomic, atomic::AtomicBool, Arc};
 use std::time::Duration;
@@ -27,12 +27,83 @@ impl Widgets<AppModel, ()> for AppWidgets {
         gtk::ApplicationWindow {
             set_title: Some("Pomo Oxide"),
             set_default_width: 350,
+            set_icon_name: Some("pomodoro-indicator"),
+            set_resizable: false,
+
+            set_titlebar = Some(&gtk::HeaderBar) {
+                pack_start = &gtk::MenuButton {
+                    set_icon_name: ICON_CONFIG,
+
+                    set_popover = Some(&gtk::Popover) {
+                        set_child = Some(&gtk::Box) {
+                            set_orientation: gtk::Orientation::Vertical,
+
+                            append = &gtk::SpinButton {
+                                set_tooltip_text: Some("Pomodoro Duration"),
+                                set_range: args!(1.0, 180.0),
+                                set_value: (model.config.pomodoro_time.as_secs() / 60) as f64,
+                                set_increments: args!(1.0, 5.0),
+
+                                connect_value_changed(sender) => move |btn|
+                                    send!(sender, AppMsg::ChangeConfig({
+                                        let value = btn.value();
+                                        Box::new(move |mut config|
+                                            config.pomodoro_time = Duration::from_secs(value as u64 * 60)
+                                        )
+                                })),
+                            },
+
+                            append = &gtk::SpinButton {
+                                set_tooltip_text: Some("Break Duration"),
+                                set_range: args!(1.0, 180.0),
+                                set_value: (model.config.break_time.as_secs() / 60) as f64,
+                                set_increments: args!(1.0, 5.0),
+
+                                connect_value_changed(sender) => move |btn|
+                                    send!(sender, AppMsg::ChangeConfig({
+                                        let value = btn.value();
+                                        Box::new(move |mut config|
+                                            config.break_time = Duration::from_secs(value as u64 * 60)
+                                        )
+                                })),
+                            },
+
+                            append = &gtk::SpinButton {
+                                set_tooltip_text: Some("Rest Duration"),
+                                set_range: args!(1.0, 180.0),
+                                set_value: (model.config.rest_time.as_secs() / 60) as f64,
+                                set_increments: args!(1.0, 5.0),
+
+                                connect_value_changed(sender) => move |btn|
+                                    send!(sender, AppMsg::ChangeConfig({
+                                        let value = btn.value();
+                                        Box::new(move |mut config|
+                                            config.rest_time = Duration::from_secs(value as u64 * 60)
+                                        )
+                                })),
+                            },
+
+                            append = &gtk::SpinButton {
+                                set_tooltip_text: Some("Rest Count - how many pomodoros until the break will be a rest."),
+                                set_range: args!(1.0, 20.0),
+                                set_value: model.config.rest_count as f64,
+                                set_increments: args!(1.0, 2.0),
+
+                                connect_value_changed(sender) => move |btn|
+                                    send!(sender, AppMsg::ChangeConfig({
+                                        let value = btn.value();
+                                        Box::new(move |mut config| config.rest_count = value as u8)
+                                })),
+                            },
+                        }
+                    }
+                },
+            },
+
             set_child = Some(&gtk::Box) {
                 set_orientation: gtk::Orientation::Vertical,
                 set_margin_all: 10,
                 set_spacing: 10,
-
-                // append = &gtk::MenuButton {}
 
                 append = &gtk::Button {
                     set_icon_name: watch!{ if model.running { ICON_PAUSE } else { ICON_START } },
@@ -74,6 +145,7 @@ impl Widgets<AppModel, ()> for AppWidgets {
                 append = &gtk::Label {
                     set_halign: gtk::Align::Center,
                     set_markup: watch!{ &min_as_markup(min_format(&model.timer)) },
+                    set_opacity: watch!{ if model.running { 1.0 } else { 0.7 } },
                 },
             }
         }
@@ -160,14 +232,15 @@ impl AppUpdate for AppModel {
             AppMsg::Toggle(toggle) => self.toggle(toggle),
             AppMsg::Skip => self.next_state(),
             AppMsg::Renew => self.restart_state(),
-            AppMsg::Restart => {
-                self.state = State::Pomodoro;
-                self.rest_counter = 0;
-                self.restart_state();
-            }
-            AppMsg::ChangeConfig(config) => {
-                self.config = *config;
-                self.restart_state()
+            AppMsg::Restart => self.restart(),
+            AppMsg::ChangeConfig(config_changer) => {
+                config_changer(&mut self.config);
+                // TODO: Save config
+                if self.config.rest_count as usize <= self.rest_counter {
+                    self.restart();
+                } else {
+                    self.restart_state();
+                }
             }
         }
 
@@ -212,7 +285,7 @@ impl AppModel {
                 self.pomodoro_count += 1;
                 self.rest_counter += 1;
 
-                if self.rest_counter % self.config.rest_count as usize == 0 {
+                if self.rest_counter >= self.config.rest_count as usize {
                     self.rest_counter = 0;
                     State::Rest
                 } else {
@@ -227,28 +300,32 @@ impl AppModel {
         self.timer = self.state.duration(&self.config);
         info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
+    fn restart(&mut self) {
+        self.state = State::Pomodoro;
+        self.rest_counter = 0;
+        self.restart_state();
+    }
 }
 
 #[allow(unused)]
-#[derive(Debug)]
 enum AppMsg {
     Step,
     Toggle(Option<bool>),
     Skip,
     Renew,
     Restart,
-    ChangeConfig(Box<Config>),
+    ChangeConfig(Box<dyn FnOnce(&mut Config) + Send>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Config {
     /// Time for each pomodoro.
     pomodoro_time: Duration,
-    /// Time for each break after a pomodoro.
+    /// Time for each break.
     break_time: Duration,
-    /// Time for each rest after `Config::pomodoro_count` pomodoros.
+    /// Time for each rest.
     rest_time: Duration,
-    /// How many pomodoros until a rest.
+    /// How many pomodoros until the break will be a rest.
     rest_count: u8,
 }
 
