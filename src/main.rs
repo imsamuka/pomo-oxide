@@ -1,9 +1,8 @@
-use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt};
-use gtk::traits::WidgetExt;
 use log::info;
+use relm4::gtk;
+use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, WidgetExt};
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
-use std::sync::atomic::{self, AtomicBool};
-use std::sync::Arc;
+use std::sync::{Arc, atomic, atomic::AtomicBool};
 use std::time::Duration;
 
 const SLEEP_STEP: Duration = Duration::from_millis(250);
