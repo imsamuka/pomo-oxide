@@ -144,11 +144,25 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
                 append = &gtk::Label {
                     set_halign: gtk::Align::Center,
+                    set_margin_all: 0,
                     set_markup: watch!{ &min_as_markup(min_format(&model.timer)) },
                     set_opacity: watch!{ if model.running { 1.0 } else { 0.7 } },
                 },
+
+                append : status_bar = &gtk::Statusbar {
+                    set_halign: gtk::Align::Center,
+                },
             }
         }
+    }
+
+    fn post_init() {
+        status_bar.push(0, &model.status_bar());
+    }
+
+    fn post_view(&mut self, model: AppModel) {
+        self.status_bar.remove_all(0);
+        self.status_bar.push(0, &model.status_bar());
     }
 }
 
@@ -157,7 +171,7 @@ struct AppModel {
     running: bool,
     timer: Duration,
     state: State,
-    rest_counter: usize,
+    rest_counter: u8,
     pomodoro_count: usize,
     config: Config,
     /// Stores if a running thread has permission to send AppMsg::Step
@@ -236,7 +250,7 @@ impl AppUpdate for AppModel {
             AppMsg::ChangeConfig(config_changer) => {
                 config_changer(&mut self.config);
                 // TODO: Save config
-                if self.config.rest_count as usize <= self.rest_counter {
+                if self.config.rest_count <= self.rest_counter {
                     self.restart();
                 } else {
                     self.restart_state();
@@ -266,40 +280,57 @@ impl AppUpdate for AppModel {
 }
 
 impl AppModel {
+    fn status_bar(&self) -> String {
+        format!(
+            "Completed: {}  -  Cycle ({}/{})",
+            self.pomodoro_count, self.rest_counter, self.config.rest_count
+        )
+    }
+
     fn toggle(&mut self, running: Option<bool>) {
         self.running = running.unwrap_or(!self.running);
     }
+
     fn clear_step_permission(&mut self) {
         if let Some(perm) = self.step_permission.take() {
             perm.store(false, atomic::Ordering::SeqCst);
         }
     }
+
     fn try_next_state(&mut self) {
         if self.timer.is_zero() {
             self.next_state()
         }
     }
+
     fn next_state(&mut self) {
         self.state = match self.state {
             State::Pomodoro => {
-                self.pomodoro_count += 1;
-                self.rest_counter += 1;
+                // avoid counting "skips" as complete pomodoros
+                if self.timer.is_zero() {
+                    self.pomodoro_count += 1;
+                }
 
-                if self.rest_counter >= self.config.rest_count as usize {
-                    self.rest_counter = 0;
+                if self.rest_counter + 1 >= self.config.rest_count {
                     State::Rest
                 } else {
                     State::Break
                 }
             }
-            State::Break | State::Rest => State::Pomodoro,
+            State::Break | State::Rest => {
+                self.rest_counter += 1;
+                self.rest_counter %= self.config.rest_count;
+                State::Pomodoro
+            }
         };
         self.restart_state()
     }
+
     fn restart_state(&mut self) {
         self.timer = self.state.duration(&self.config);
         info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
+
     fn restart(&mut self) {
         self.state = State::Pomodoro;
         self.rest_counter = 0;
