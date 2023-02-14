@@ -139,12 +139,11 @@ impl Widgets<AppModel, ()> for AppWidgets {
 
                 append = &gtk::Label {
                     set_halign: gtk::Align::Center,
-                    set_markup: watch!{ &model.state.as_markup(&model.config) },
+                    set_markup: watch!{ &model.state_as_markup() },
                 },
 
                 append = &gtk::Label {
                     set_halign: gtk::Align::Center,
-                    set_margin_all: 0,
                     set_markup: watch!{ &min_as_markup(min_format(&model.timer)) },
                     set_opacity: watch!{ if model.running { 1.0 } else { 0.7 } },
                 },
@@ -228,6 +227,16 @@ impl State {
             r#"<span font="Sans Bold 28" color="{}">{}</span>"#,
             color, self
         )
+    }
+}
+
+impl AppModel {
+    fn state_duration(&self) -> Duration {
+        self.state.duration(&self.config)
+    }
+
+    fn state_as_markup(&self) -> String {
+        self.state.as_markup(&self.config)
     }
 }
 
@@ -327,7 +336,7 @@ impl AppModel {
     }
 
     fn restart_state(&mut self) {
-        self.timer = self.state.duration(&self.config);
+        self.timer = self.state_duration();
         info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
 
