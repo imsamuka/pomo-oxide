@@ -1,4 +1,5 @@
-use log::info;
+use log::*;
+use playback_rs::{Player, Song};
 use relm4::gtk;
 use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, PopoverExt, WidgetExt};
 use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
@@ -13,6 +14,8 @@ const ICON_SKIP: &str = "media-skip-forward-symbolic"; // maybe go-jump-symbolic
 const ICON_RENEW: &str = "media-skip-backward-symbolic";
 const ICON_RESTART: &str = "object-rotate-left-symbolic";
 const ICON_CONFIG: &str = "preferences-system-symbolic"; // maybe applications-system-symbolic
+
+const DEFAULT_SOUND: &str = "default.ogg";
 
 fn main() {
     simple_logger::init_with_env().unwrap();
@@ -165,10 +168,11 @@ impl Widgets<AppModel, ()> for AppWidgets {
     }
 }
 
-#[derive(Debug)]
 struct AppModel {
     running: bool,
     timer: Duration,
+    player: Player,
+    song: Option<Song>,
     state: State,
     rest_counter: u8,
     pomodoro_count: usize,
@@ -181,6 +185,9 @@ impl Default for AppModel {
     fn default() -> Self {
         let state = State::default();
         let config = Config::default();
+        let song = Song::from_file(&config.sound_path)
+            .map_err(|e| warn!("failed to open audio file: {e}"))
+            .ok();
         Self {
             running: false,
             timer: state.duration(&config),
@@ -189,6 +196,8 @@ impl Default for AppModel {
             pomodoro_count: 0,
             config,
             step_permission: None,
+            player: Player::new().expect("couldn't create audio player"),
+            song,
         }
     }
 }
@@ -332,11 +341,19 @@ impl AppModel {
                 State::Pomodoro
             }
         };
+        if self.timer.is_zero() {
+            if let Some(song) = self.song.as_ref() {
+                self.player.play_song_now(song).unwrap();
+            }
+        }
         self.restart_state()
     }
 
     fn restart_state(&mut self) {
         self.timer = self.state_duration();
+        if let Some(song) = self.song.as_ref() {
+            self.player.play_song_now(song).unwrap();
+        }
         info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
 
@@ -367,6 +384,8 @@ struct Config {
     rest_time: Duration,
     /// How many pomodoros until the break will be a rest.
     rest_count: u8,
+    /// Sound file path
+    sound_path: String,
 }
 
 impl Default for Config {
@@ -376,6 +395,7 @@ impl Default for Config {
             break_time: Duration::from_secs(60 * 5),
             rest_time: Duration::from_secs(60 * 20),
             rest_count: 4,
+            sound_path: String::from(DEFAULT_SOUND),
         }
     }
 }
