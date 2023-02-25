@@ -1,8 +1,7 @@
+use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, PopoverExt, WidgetExt};
 use log::*;
 use playback_rs::{Player, Song};
-use relm4::gtk;
-use relm4::gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, PopoverExt, WidgetExt};
-use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
+use relm4::{gtk, ComponentParts, ComponentSender, RelmApp, RelmWidgetExt, SimpleComponent};
 use std::sync::{atomic, atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -19,13 +18,33 @@ const DEFAULT_SOUND: &str = "default.ogg";
 
 fn main() {
     simple_logger::init_with_env().unwrap();
-    let model = AppModel::default();
-    let app = RelmApp::new(model);
-    app.run();
+    let app = RelmApp::new("pomo-oxide");
+    let config = Config::default();
+    app.run::<AppModel>(config);
 }
 
-#[relm4_macros::widget]
-impl Widgets<AppModel, ()> for AppWidgets {
+#[relm4::component]
+impl SimpleComponent for AppModel {
+    type Input = AppMsg;
+    type Output = ();
+    type Init = Config;
+
+    fn init(
+        config: Self::Init,
+        root: &Self::Root,
+        sender: ComponentSender<Self>,
+    ) -> ComponentParts<Self> {
+        let model = AppModel::new(config);
+        let widgets = view_output!();
+        widgets.status_bar.push(0, &model.status_bar());
+        ComponentParts { model, widgets }
+    }
+
+    fn post_view() {
+        widgets.status_bar.remove_all(0);
+        widgets.status_bar.push(0, &model.status_bar());
+    }
+
     view! {
         gtk::ApplicationWindow {
             set_title: Some("Pomo Oxide"),
@@ -33,138 +52,175 @@ impl Widgets<AppModel, ()> for AppWidgets {
             set_icon_name: Some("pomodoro-indicator"),
             set_resizable: false,
 
-            set_titlebar = Some(&gtk::HeaderBar) {
+            #[wrap(Some)]
+            set_titlebar = &gtk::HeaderBar {
                 pack_start = &gtk::MenuButton {
                     set_icon_name: ICON_CONFIG,
 
-                    set_popover = Some(&gtk::Popover) {
-                        set_child = Some(&gtk::Box) {
+                    #[wrap(Some)]
+                    set_popover = &gtk::Popover {
+                        gtk::Box {
                             set_orientation: gtk::Orientation::Vertical,
 
-                            append = &gtk::SpinButton {
+                            gtk::SpinButton {
                                 set_tooltip_text: Some("Pomodoro Duration"),
-                                set_range: args!(1.0, 180.0),
+                                set_range: (1.0, 180.0),
                                 set_value: (model.config.pomodoro_time.as_secs() / 60) as f64,
-                                set_increments: args!(1.0, 5.0),
+                                set_increments: (1.0, 5.0),
 
-                                connect_value_changed(sender) => move |btn|
-                                    send!(sender, AppMsg::ChangeConfig({
-                                        let value = btn.value();
-                                        Box::new(move |mut config|
-                                            config.pomodoro_time = Duration::from_secs(value as u64 * 60)
-                                        )
-                                })),
+                                connect_value_changed[sender] => move |btn| {
+                                    let value = btn.value() as u64;
+                                    sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
+                                        config.pomodoro_time = Duration::from_secs(value * 60)
+                                    )))
+                                },
                             },
 
-                            append = &gtk::SpinButton {
+                            gtk::SpinButton {
                                 set_tooltip_text: Some("Break Duration"),
-                                set_range: args!(1.0, 180.0),
+                                set_range: (1.0, 180.0),
                                 set_value: (model.config.break_time.as_secs() / 60) as f64,
-                                set_increments: args!(1.0, 5.0),
+                                set_increments: (1.0, 5.0),
 
-                                connect_value_changed(sender) => move |btn|
-                                    send!(sender, AppMsg::ChangeConfig({
-                                        let value = btn.value();
-                                        Box::new(move |mut config|
-                                            config.break_time = Duration::from_secs(value as u64 * 60)
-                                        )
-                                })),
+                                connect_value_changed[sender] => move |btn| {
+                                    let value = btn.value() as u64;
+                                    sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
+                                        config.break_time = Duration::from_secs(value * 60)
+                                    )))
+                                },
                             },
 
-                            append = &gtk::SpinButton {
+                            gtk::SpinButton {
                                 set_tooltip_text: Some("Rest Duration"),
-                                set_range: args!(1.0, 180.0),
+                                set_range: (1.0, 180.0),
                                 set_value: (model.config.rest_time.as_secs() / 60) as f64,
-                                set_increments: args!(1.0, 5.0),
+                                set_increments: (1.0, 5.0),
 
-                                connect_value_changed(sender) => move |btn|
-                                    send!(sender, AppMsg::ChangeConfig({
-                                        let value = btn.value();
-                                        Box::new(move |mut config|
-                                            config.rest_time = Duration::from_secs(value as u64 * 60)
-                                        )
-                                })),
+                                connect_value_changed[sender] => move |btn| {
+                                    let value = btn.value() as u64;
+                                    sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
+                                        config.rest_time = Duration::from_secs(value * 60)
+                                    )))
+                                },
                             },
 
-                            append = &gtk::SpinButton {
+                            gtk::SpinButton {
                                 set_tooltip_text: Some("Rest Count - how many pomodoros until the break will be a rest."),
-                                set_range: args!(1.0, 20.0),
+                                set_range: (1.0, 20.0),
                                 set_value: model.config.rest_count as f64,
-                                set_increments: args!(1.0, 2.0),
+                                set_increments: (1.0, 2.0),
 
-                                connect_value_changed(sender) => move |btn|
-                                    send!(sender, AppMsg::ChangeConfig({
-                                        let value = btn.value();
-                                        Box::new(move |mut config| config.rest_count = value as u8)
-                                })),
+                                connect_value_changed[sender] => move |btn| {
+                                    let value = btn.value() as u8;
+                                    sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
+                                        config.rest_count = value
+                                    )))
+                                },
                             },
                         }
                     }
                 },
             },
 
-            set_child = Some(&gtk::Box) {
+            gtk::Box {
                 set_orientation: gtk::Orientation::Vertical,
                 set_margin_all: 10,
                 set_spacing: 10,
 
-                append = &gtk::Button {
-                    set_icon_name: watch!{ if model.running { ICON_PAUSE } else { ICON_START } },
-                    set_tooltip_text: watch!{ Some(if model.running { "Pause" } else { "Start" }) },
+                gtk::Button {
+                    #[watch]
+                    set_icon_name: if model.running { ICON_PAUSE } else { ICON_START },
+                    #[watch]
+                    set_tooltip_text: Some(if model.running { "Pause" } else { "Start" }),
                     set_height_request: 50,
-                    connect_clicked(sender) => move |_| { send!(sender, AppMsg::Toggle(None)) },
+                    connect_clicked => AppMsg::Toggle(None),
                 },
 
-                append = &gtk::Box {
+                gtk::Box {
                     set_orientation: gtk::Orientation::Horizontal,
                     set_spacing: 10,
                     set_height_request: 40,
                     set_homogeneous: true,
 
-                    append = &gtk::Button {
+                    gtk::Button {
                         set_icon_name: ICON_SKIP,
                         set_tooltip_text: Some("Skip"),
-                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Skip) },
+                        connect_clicked => AppMsg::Skip,
                     },
 
-                    append = &gtk::Button {
+                    gtk::Button {
                         set_icon_name: ICON_RENEW,
-                        set_tooltip_text: watch!{ Some(&format!("Renew {}", model.state)) },
-                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Renew) },
+                        #[watch]
+                        set_tooltip_text: Some(&format!("Renew {}", model.state)),
+                        connect_clicked => AppMsg::Renew,
                     },
 
-                    append = &gtk::Button {
+                    gtk::Button {
                         set_icon_name: ICON_RESTART,
                         set_tooltip_text: Some("Restart"),
-                        connect_clicked(sender) => move |_| { send!(sender, AppMsg::Restart) },
+                        connect_clicked => AppMsg::Restart,
                     },
                 },
 
-                append = &gtk::Label {
+                gtk::Label {
                     set_halign: gtk::Align::Center,
-                    set_markup: watch!{ &model.state_as_markup() },
+                    #[watch]
+                    set_markup: &model.state_as_markup(),
                 },
 
-                append = &gtk::Label {
+                gtk::Label {
                     set_halign: gtk::Align::Center,
-                    set_markup: watch!{ &min_as_markup(min_format(&model.timer)) },
-                    set_opacity: watch!{ if model.running { 1.0 } else { 0.7 } },
+                    #[watch]
+                    set_markup: &min_as_markup(min_format(&model.timer)),
+                    #[watch]
+                    set_opacity: if model.running { 1.0 } else { 0.7 },
                 },
 
-                append : status_bar = &gtk::Statusbar {
+                #[name = "status_bar"]
+                gtk::Statusbar {
                     set_halign: gtk::Align::Center,
                 },
             }
+
         }
     }
 
-    fn post_init() {
-        status_bar.push(0, &model.status_bar());
-    }
+    fn update(&mut self, message: Self::Input, sender: ComponentSender<Self>) {
+        self.clear_step_permission();
 
-    fn post_view(&mut self, model: AppModel) {
-        self.status_bar.remove_all(0);
-        self.status_bar.push(0, &model.status_bar());
+        match message {
+            AppMsg::Step => self.try_next_state(),
+            AppMsg::Toggle(toggle) => self.toggle(toggle),
+            AppMsg::Skip => self.next_state(),
+            AppMsg::Renew => self.restart_state(),
+            AppMsg::Restart => self.restart(),
+            AppMsg::ChangeConfig(config_changer) => {
+                config_changer(&mut self.config);
+                // TODO: Save config
+                if self.config.rest_count <= self.rest_counter {
+                    self.restart();
+                } else {
+                    self.restart_state();
+                }
+            }
+        }
+
+        if self.running {
+            let duration = SLEEP_STEP.min(self.timer);
+            self.timer -= duration;
+
+            self.clear_step_permission();
+            let perm = Arc::new(AtomicBool::new(true));
+            self.step_permission = Some(Arc::clone(&perm));
+
+            std::thread::spawn(move || {
+                std::thread::sleep(duration);
+                // if we still have permission, send step
+                if perm.load(atomic::Ordering::SeqCst) {
+                    sender.input(AppMsg::Step);
+                }
+            });
+        }
     }
 }
 
@@ -181,22 +237,21 @@ struct AppModel {
     step_permission: Option<Arc<AtomicBool>>,
 }
 
-impl Default for AppModel {
-    fn default() -> Self {
+impl AppModel {
+    fn new(config: Config) -> Self {
+        let player = Player::new().expect("couldn't create audio player");
+        let song = try_song(&config.sound_path);
         let state = State::default();
-        let config = Config::default();
-        let song = Song::from_file(&config.sound_path)
-            .map_err(|e| warn!("failed to open audio file: {e}"))
-            .ok();
+        let timer = state.duration(&config);
         Self {
             running: false,
-            timer: state.duration(&config),
+            timer,
             state,
             rest_counter: 0,
             pomodoro_count: 0,
             config,
             step_permission: None,
-            player: Player::new().expect("couldn't create audio player"),
+            player,
             song,
         }
     }
@@ -247,57 +302,7 @@ impl AppModel {
     fn state_as_markup(&self) -> String {
         self.state.as_markup(&self.config)
     }
-}
 
-impl Model for AppModel {
-    type Msg = AppMsg;
-    type Widgets = AppWidgets;
-    type Components = ();
-}
-
-impl AppUpdate for AppModel {
-    fn update(&mut self, msg: Self::Msg, _: &Self::Components, sender: Sender<Self::Msg>) -> bool {
-        self.clear_step_permission();
-
-        match msg {
-            AppMsg::Step => self.try_next_state(),
-            AppMsg::Toggle(toggle) => self.toggle(toggle),
-            AppMsg::Skip => self.next_state(),
-            AppMsg::Renew => self.restart_state(),
-            AppMsg::Restart => self.restart(),
-            AppMsg::ChangeConfig(config_changer) => {
-                config_changer(&mut self.config);
-                // TODO: Save config
-                if self.config.rest_count <= self.rest_counter {
-                    self.restart();
-                } else {
-                    self.restart_state();
-                }
-            }
-        }
-
-        if self.running {
-            let duration = SLEEP_STEP.min(self.timer);
-            self.timer -= duration;
-
-            self.clear_step_permission();
-            let perm = Arc::new(AtomicBool::new(true));
-            self.step_permission = Some(Arc::clone(&perm));
-
-            std::thread::spawn(move || {
-                std::thread::sleep(duration);
-                // if we still have permission, send step
-                if perm.load(atomic::Ordering::SeqCst) {
-                    sender.send(AppMsg::Step).unwrap();
-                }
-            });
-        }
-
-        true
-    }
-}
-
-impl AppModel {
     fn status_bar(&self) -> String {
         format!(
             "Completed: {}  -  Cycle ({}/{})",
@@ -351,6 +356,7 @@ impl AppModel {
 
     fn restart_state(&mut self) {
         self.timer = self.state_duration();
+        // TODO: remove playing from here - only here for debug
         if let Some(song) = self.song.as_ref() {
             self.player.play_song_now(song).unwrap();
         }
@@ -364,7 +370,6 @@ impl AppModel {
     }
 }
 
-#[allow(unused)]
 enum AppMsg {
     Step,
     Toggle(Option<bool>),
@@ -372,6 +377,19 @@ enum AppMsg {
     Renew,
     Restart,
     ChangeConfig(Box<dyn FnOnce(&mut Config) + Send>),
+}
+
+impl std::fmt::Debug for AppMsg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Step => write!(f, "Step"),
+            Self::Toggle(arg0) => f.debug_tuple("Toggle").field(arg0).finish(),
+            Self::Skip => write!(f, "Skip"),
+            Self::Renew => write!(f, "Renew"),
+            Self::Restart => write!(f, "Restart"),
+            Self::ChangeConfig(_) => write!(f, "ChangeConfig(<closure>)"),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -409,4 +427,10 @@ fn min_format(dur: &Duration) -> String {
 
 fn min_as_markup(s: String) -> String {
     format!("<span font=\"Sans Bold 64\">{}</span>", s)
+}
+
+fn try_song(path: &str) -> Option<Song> {
+    Song::from_file(path)
+        .map_err(|e| warn!("failed to open audio file: {e}"))
+        .ok()
 }
