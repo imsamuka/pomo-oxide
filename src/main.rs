@@ -1,7 +1,10 @@
-use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt, PopoverExt, WidgetExt};
+use gtk::prelude::*;
 use log::*;
 use playback_rs::{Player, Song};
-use relm4::{gtk, ComponentParts, ComponentSender, RelmApp, RelmWidgetExt, SimpleComponent};
+use relm4::prelude::*;
+use relm4_components::open_dialog::*;
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{atomic, atomic::AtomicBool, Arc};
 use std::time::Duration;
 
@@ -35,14 +38,41 @@ impl SimpleComponent for AppModel {
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
         let model = AppModel::new(config);
+
+        let song_dialog = OpenDialog::builder()
+            .transient_for_native(root)
+            .launch(OpenDialogSettings::default())
+            .forward(sender.input_sender(), |response| match response {
+                OpenDialogResponse::Accept(path) => {
+                    AppMsg::ChangeConfig(Box::new(move |mut config| {
+                        config.sound_path = path;
+                    }))
+                }
+                OpenDialogResponse::Cancel => AppMsg::Ignore,
+            });
+        let song_dialog = Rc::new(song_dialog);
+        let song_dialog_ref = Rc::clone(&song_dialog);
+
         let widgets = view_output!();
+        let popover_ref = widgets.popover.clone();
+
+        widgets.song_btn.connect_clicked(move |_btn| {
+            popover_ref.popdown();
+            song_dialog_ref.emit(OpenDialogMsg::Open);
+        });
+
         widgets.status_bar.push(0, &model.status_bar());
+
         ComponentParts { model, widgets }
     }
 
     fn post_view() {
         widgets.status_bar.remove_all(0);
         widgets.status_bar.push(0, &model.status_bar());
+    }
+
+    additional_fields! {
+        song_dialog: Rc<Controller<OpenDialogInner<SingleSelection>>>,
     }
 
     view! {
@@ -57,6 +87,7 @@ impl SimpleComponent for AppModel {
                 pack_start = &gtk::MenuButton {
                     set_icon_name: ICON_CONFIG,
 
+                    #[name = "popover"]
                     #[wrap(Some)]
                     set_popover = &gtk::Popover {
                         gtk::Box {
@@ -117,6 +148,25 @@ impl SimpleComponent for AppModel {
                                     )))
                                 },
                             },
+
+                            gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 10,
+
+                                #[name = "song_btn"]
+                                gtk::Button::with_label("Change Sound") {
+                                    set_tooltip_text: Some("Select another sound file"),
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: ICON_RESTART,
+                                    set_tooltip_text: Some("Use default sound file"),
+                                    connect_clicked => AppMsg::ChangeConfig(Box::new(|mut config|
+                                        config.sound_path = DEFAULT_SOUND.into()
+                                    )),
+                                },
+                            },
+
                         }
                     }
                 },
@@ -189,20 +239,13 @@ impl SimpleComponent for AppModel {
         self.clear_step_permission();
 
         match message {
+            AppMsg::Ignore => return,
             AppMsg::Step => self.try_next_state(),
             AppMsg::Toggle(toggle) => self.toggle(toggle),
             AppMsg::Skip => self.next_state(),
             AppMsg::Renew => self.restart_state(),
             AppMsg::Restart => self.restart(),
-            AppMsg::ChangeConfig(config_changer) => {
-                config_changer(&mut self.config);
-                // TODO: Save config
-                if self.config.rest_count <= self.rest_counter {
-                    self.restart();
-                } else {
-                    self.restart_state();
-                }
-            }
+            AppMsg::ChangeConfig(config_changer) => self.change_config(config_changer),
         }
 
         if self.running {
@@ -368,9 +411,28 @@ impl AppModel {
         self.rest_counter = 0;
         self.restart_state();
     }
+
+    fn change_config(&mut self, config_changer: Box<dyn FnOnce(&mut Config) + Send>) {
+        let sound_path = self.config.sound_path.clone();
+
+        config_changer(&mut self.config);
+
+        if sound_path != self.config.sound_path {
+            self.song = try_song(&self.config.sound_path).or(self.song.take());
+        }
+
+        // TODO: Save config
+
+        if self.config.rest_count <= self.rest_counter {
+            self.restart();
+        } else {
+            self.restart_state();
+        }
+    }
 }
 
 enum AppMsg {
+    Ignore,
     Step,
     Toggle(Option<bool>),
     Skip,
@@ -382,6 +444,7 @@ enum AppMsg {
 impl std::fmt::Debug for AppMsg {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Ignore => write!(f, "Ignore"),
             Self::Step => write!(f, "Step"),
             Self::Toggle(arg0) => f.debug_tuple("Toggle").field(arg0).finish(),
             Self::Skip => write!(f, "Skip"),
@@ -403,7 +466,7 @@ struct Config {
     /// How many pomodoros until the break will be a rest.
     rest_count: u8,
     /// Sound file path
-    sound_path: String,
+    sound_path: PathBuf,
 }
 
 impl Default for Config {
@@ -413,7 +476,7 @@ impl Default for Config {
             break_time: Duration::from_secs(60 * 5),
             rest_time: Duration::from_secs(60 * 20),
             rest_count: 4,
-            sound_path: String::from(DEFAULT_SOUND),
+            sound_path: DEFAULT_SOUND.into(),
         }
     }
 }
@@ -429,7 +492,7 @@ fn min_as_markup(s: String) -> String {
     format!("<span font=\"Sans Bold 64\">{}</span>", s)
 }
 
-fn try_song(path: &str) -> Option<Song> {
+fn try_song(path: &PathBuf) -> Option<Song> {
     Song::from_file(path)
         .map_err(|e| warn!("failed to open audio file: {e}"))
         .ok()
