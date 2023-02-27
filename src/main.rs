@@ -113,6 +113,8 @@ impl SimpleComponent for AppModel {
                             gtk::SpinButton {
                                 set_tooltip_text: Some("Pomodoro Duration"),
                                 set_range: (1.0, 180.0),
+                                #[watch]
+                                #[block_signal(toggle_handler_0)]
                                 set_value: (model.config.pomodoro_time.as_secs() / 60) as f64,
                                 set_increments: (1.0, 5.0),
 
@@ -121,12 +123,14 @@ impl SimpleComponent for AppModel {
                                     sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
                                         config.pomodoro_time = Duration::from_secs(value * 60)
                                     )))
-                                },
+                                } @toggle_handler_0,
                             },
 
                             gtk::SpinButton {
                                 set_tooltip_text: Some("Break Duration"),
                                 set_range: (1.0, 180.0),
+                                #[watch]
+                                #[block_signal(toggle_handler_1)]
                                 set_value: (model.config.break_time.as_secs() / 60) as f64,
                                 set_increments: (1.0, 5.0),
 
@@ -135,12 +139,14 @@ impl SimpleComponent for AppModel {
                                     sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
                                         config.break_time = Duration::from_secs(value * 60)
                                     )))
-                                },
+                                } @toggle_handler_1,
                             },
 
                             gtk::SpinButton {
                                 set_tooltip_text: Some("Rest Duration"),
                                 set_range: (1.0, 180.0),
+                                #[watch]
+                                #[block_signal(toggle_handler_2)]
                                 set_value: (model.config.rest_time.as_secs() / 60) as f64,
                                 set_increments: (1.0, 5.0),
 
@@ -149,12 +155,14 @@ impl SimpleComponent for AppModel {
                                     sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
                                         config.rest_time = Duration::from_secs(value * 60)
                                     )))
-                                },
+                                } @toggle_handler_2,
                             },
 
                             gtk::SpinButton {
                                 set_tooltip_text: Some("Rest Count - how many pomodoros until the break will be a rest."),
                                 set_range: (1.0, 20.0),
+                                #[watch]
+                                #[block_signal(toggle_handler_3)]
                                 set_value: model.config.rest_count as f64,
                                 set_increments: (1.0, 2.0),
 
@@ -163,7 +171,7 @@ impl SimpleComponent for AppModel {
                                     sender.input(AppMsg::ChangeConfig(Box::new(move |mut config|
                                         config.rest_count = value
                                     )))
-                                },
+                                } @toggle_handler_3,
                             },
 
                             gtk::Box {
@@ -172,14 +180,17 @@ impl SimpleComponent for AppModel {
 
                                 #[name = "song_btn"]
                                 gtk::Button::with_label("Change Sound") {
-                                    set_tooltip_text: Some("Select another sound file"),
+                                    #[watch]
+                                    set_tooltip_text: Some(&format!("Current file: {:?}",
+                                        model.config.sound_path.file_name().unwrap_or_default()
+                                    )),
                                 },
 
                                 gtk::Button {
                                     set_icon_name: ICON_RESTART,
-                                    set_tooltip_text: Some("Use default sound file"),
-                                    connect_clicked => AppMsg::ChangeConfig(Box::new(|mut config|
-                                        config.sound_path = DEFAULT_SOUND.into()
+                                    set_tooltip_text: Some("Restore default configuration"),
+                                    connect_clicked => AppMsg::ChangeConfig(Box::new(|config|
+                                        *config = Config::default()
                                     )),
                                 },
                             },
@@ -428,12 +439,16 @@ impl AppModel {
     }
 
     fn change_config(&mut self, config_changer: Box<dyn FnOnce(&mut Config) + Send>) {
-        let sound_path = self.config.sound_path.clone();
+        let previous_sound_path = self.config.sound_path.clone();
 
         config_changer(&mut self.config);
 
-        if sound_path != self.config.sound_path {
-            self.song = try_song(&self.config.sound_path).or(self.song.take());
+        if previous_sound_path != self.config.sound_path {
+            match try_song(&self.config.sound_path) {
+                Some(new_song) => self.song = Some(new_song),
+                None => self.config.sound_path = previous_sound_path,
+            };
+
             if let Some(song) = self.song.as_ref() {
                 self.player.play_song_now(song).unwrap();
             }
@@ -517,6 +532,6 @@ fn min_as_markup(s: String) -> String {
 
 fn try_song(path: &PathBuf) -> Option<Song> {
     Song::from_file(path)
-        .map_err(|e| warn!("failed to open audio file: {e}"))
+        .map_err(|e| warn!("Failed to open audio file: {e}"))
         .ok()
 }
