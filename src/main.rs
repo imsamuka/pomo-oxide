@@ -1,8 +1,11 @@
+use directories::ProjectDirs;
 use gtk::prelude::*;
 use log::*;
 use playback_rs::{Player, Song};
 use relm4::prelude::*;
 use relm4_components::open_dialog::*;
+use serde::{Deserialize, Serialize};
+use std::fs::read_to_string;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{atomic, atomic::AtomicBool, Arc};
@@ -17,28 +20,42 @@ const ICON_RENEW: &str = "media-skip-backward-symbolic";
 const ICON_RESTART: &str = "object-rotate-left-symbolic";
 const ICON_CONFIG: &str = "preferences-system-symbolic"; // maybe applications-system-symbolic
 
+const CONFIG_FILE: &str = "config.bin";
 const DEFAULT_SOUND: &str = "default.ogg";
 
 fn main() {
     simple_logger::init_with_env().unwrap();
+
+    let dirs = ProjectDirs::from("", "", "pomo-oxide").expect("couldn't get project directories");
+    let config_file = dirs.config_dir().join(CONFIG_FILE);
+    std::fs::create_dir_all(dirs.config_dir())
+        .unwrap_or_else(|e| warn!("Error creating config directory: {e}"));
+
+    let config = {
+        (|| -> Result<Config, Box<dyn std::error::Error>> {
+            let input = read_to_string(&config_file)?;
+            Ok(serde_json::from_str(&input)?)
+        })()
+        .map_err(|e| warn!("Error loading config: {e}"))
+        .unwrap_or_default()
+    };
+
+    let model = AppModel::new(config, config_file);
     let app = RelmApp::new("pomo-oxide");
-    let config = Config::default();
-    app.run::<AppModel>(config);
+    app.run::<AppModel>(model);
 }
 
 #[relm4::component]
 impl SimpleComponent for AppModel {
     type Input = AppMsg;
     type Output = ();
-    type Init = Config;
+    type Init = Self;
 
     fn init(
-        config: Self::Init,
+        model: Self::Init,
         root: &Self::Root,
         sender: ComponentSender<Self>,
     ) -> ComponentParts<Self> {
-        let model = AppModel::new(config);
-
         let song_dialog = OpenDialog::builder()
             .transient_for_native(root)
             .launch(OpenDialogSettings::default())
@@ -276,12 +293,13 @@ struct AppModel {
     rest_counter: u8,
     pomodoro_count: usize,
     config: Config,
+    config_file: PathBuf,
     /// Stores if a running thread has permission to send AppMsg::Step
     step_permission: Option<Arc<AtomicBool>>,
 }
 
 impl AppModel {
-    fn new(config: Config) -> Self {
+    fn new(config: Config, config_file: PathBuf) -> Self {
         let player = Player::new().expect("couldn't create audio player");
         let song = try_song(&config.sound_path);
         let state = State::default();
@@ -293,6 +311,7 @@ impl AppModel {
             rest_counter: 0,
             pomodoro_count: 0,
             config,
+            config_file,
             step_permission: None,
             player,
             song,
@@ -399,10 +418,6 @@ impl AppModel {
 
     fn restart_state(&mut self) {
         self.timer = self.state_duration();
-        // TODO: remove playing from here - only here for debug
-        if let Some(song) = self.song.as_ref() {
-            self.player.play_song_now(song).unwrap();
-        }
         info!("Starting {:?} - {}", &self.state, min_format(&self.timer));
     }
 
@@ -419,9 +434,17 @@ impl AppModel {
 
         if sound_path != self.config.sound_path {
             self.song = try_song(&self.config.sound_path).or(self.song.take());
+            if let Some(song) = self.song.as_ref() {
+                self.player.play_song_now(song).unwrap();
+            }
         }
 
-        // TODO: Save config
+        info!("Saving config");
+        (|| -> Result<_, Box<dyn std::error::Error>> {
+            let encoded = serde_json::to_vec_pretty(&self.config)?;
+            Ok(std::fs::write(&self.config_file, encoded)?)
+        })()
+        .unwrap_or_else(|e| warn!("Error saving config: {e}"));
 
         if self.config.rest_count <= self.rest_counter {
             self.restart();
@@ -455,7 +478,7 @@ impl std::fmt::Debug for AppMsg {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 struct Config {
     /// Time for each pomodoro.
     pomodoro_time: Duration,
