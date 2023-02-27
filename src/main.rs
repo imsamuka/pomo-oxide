@@ -1,7 +1,8 @@
 use directories::ProjectDirs;
 use gtk::prelude::*;
 use log::*;
-use playback_rs::{Player, Song};
+use once_cell::sync::Lazy;
+use playback_rs::*;
 use relm4::prelude::*;
 use relm4_components::open_dialog::*;
 use serde::{Deserialize, Serialize};
@@ -20,27 +21,35 @@ const ICON_RENEW: &str = "media-skip-backward-symbolic";
 const ICON_RESTART: &str = "object-rotate-left-symbolic";
 const ICON_CONFIG: &str = "preferences-system-symbolic"; // maybe applications-system-symbolic
 
-const CONFIG_FILE: &str = "config.bin";
-const DEFAULT_SOUND: &str = "default.ogg";
+const DEFAULT_SONG_NAME: &str = "default.ogg";
+static DEFAULT_SONG: Lazy<Song> = Lazy::new(|| {
+    let bytes = std::io::Cursor::new(include_bytes!("default.ogg"));
+    let mut hint = Hint::new();
+    hint.with_extension("ogg");
+    Song::new(Box::new(bytes), &hint).expect("couldn't load \"default.ogg\"")
+});
+
+static DIRS: Lazy<ProjectDirs> = Lazy::new(|| {
+    ProjectDirs::from("", "", "pomo-oxide").expect("couldn't get project directories")
+});
+static CONFIG_FILE: Lazy<PathBuf> = Lazy::new(|| DIRS.config_dir().join("config.json"));
 
 fn main() {
     simple_logger::init_with_env().unwrap();
 
-    let dirs = ProjectDirs::from("", "", "pomo-oxide").expect("couldn't get project directories");
-    let config_file = dirs.config_dir().join(CONFIG_FILE);
-    std::fs::create_dir_all(dirs.config_dir())
+    std::fs::create_dir_all(DIRS.config_dir())
         .unwrap_or_else(|e| warn!("Error creating config directory: {e}"));
 
     let config = {
         (|| -> Result<Config, Box<dyn std::error::Error>> {
-            let input = read_to_string(&config_file)?;
+            let input = read_to_string(&*CONFIG_FILE)?;
             Ok(serde_json::from_str(&input)?)
         })()
         .map_err(|e| warn!("Error loading config: {e}"))
         .unwrap_or_default()
     };
 
-    let model = AppModel::new(config, config_file);
+    let model = AppModel::new(config);
     let app = RelmApp::new("pomo-oxide");
     app.run::<AppModel>(model);
 }
@@ -299,20 +308,26 @@ struct AppModel {
     running: bool,
     timer: Duration,
     player: Player,
-    song: Option<Song>,
+    song: Song,
     state: State,
     rest_counter: u8,
     pomodoro_count: usize,
     config: Config,
-    config_file: PathBuf,
     /// Stores if a running thread has permission to send AppMsg::Step
     step_permission: Option<Arc<AtomicBool>>,
 }
 
 impl AppModel {
-    fn new(config: Config, config_file: PathBuf) -> Self {
+    fn new(mut config: Config) -> Self {
         let player = Player::new().expect("couldn't create audio player");
-        let song = try_song(&config.sound_path);
+        let song = match try_song(&config.sound_path) {
+            Some(loaded) => loaded,
+            None => {
+                config.sound_path = DEFAULT_SONG_NAME.into();
+                DEFAULT_SONG.clone()
+            }
+        };
+
         let state = State::default();
         let timer = state.duration(&config);
         Self {
@@ -322,7 +337,6 @@ impl AppModel {
             rest_counter: 0,
             pomodoro_count: 0,
             config,
-            config_file,
             step_permission: None,
             player,
             song,
@@ -420,9 +434,7 @@ impl AppModel {
             }
         };
         if self.timer.is_zero() {
-            if let Some(song) = self.song.as_ref() {
-                self.player.play_song_now(song).unwrap();
-            }
+            self.player.play_song_now(&self.song).unwrap();
         }
         self.restart_state()
     }
@@ -445,19 +457,17 @@ impl AppModel {
 
         if previous_sound_path != self.config.sound_path {
             match try_song(&self.config.sound_path) {
-                Some(new_song) => self.song = Some(new_song),
+                Some(new_song) => self.song = new_song,
                 None => self.config.sound_path = previous_sound_path,
             };
 
-            if let Some(song) = self.song.as_ref() {
-                self.player.play_song_now(song).unwrap();
-            }
+            self.player.play_song_now(&self.song).unwrap();
         }
 
         info!("Saving config");
         (|| -> Result<_, Box<dyn std::error::Error>> {
             let encoded = serde_json::to_vec_pretty(&self.config)?;
-            Ok(std::fs::write(&self.config_file, encoded)?)
+            Ok(std::fs::write(&*CONFIG_FILE, encoded)?)
         })()
         .unwrap_or_else(|e| warn!("Error saving config: {e}"));
 
@@ -514,7 +524,7 @@ impl Default for Config {
             break_time: Duration::from_secs(60 * 5),
             rest_time: Duration::from_secs(60 * 20),
             rest_count: 4,
-            sound_path: DEFAULT_SOUND.into(),
+            sound_path: DEFAULT_SONG_NAME.into(),
         }
     }
 }
@@ -531,7 +541,10 @@ fn min_as_markup(s: String) -> String {
 }
 
 fn try_song(path: &PathBuf) -> Option<Song> {
-    Song::from_file(path)
-        .map_err(|e| warn!("Failed to open audio file: {e}"))
-        .ok()
+    match path == &PathBuf::from(DEFAULT_SONG_NAME) {
+        true => Some(DEFAULT_SONG.clone()),
+        false => Song::from_file(path)
+            .map_err(|e| warn!("Failed to open audio file: {e}"))
+            .ok(),
+    }
 }
